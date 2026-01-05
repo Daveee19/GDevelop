@@ -42,8 +42,80 @@ const {
 } = require('./LocalGDJSDevelopmentWatcher');
 const { setupWatcher, disableWatcher } = require('./LocalFilesystemWatcher');
 
+// --- GPU OPTIMIZATION IMPORTS ---
+const { execSync, spawn } = require('child_process');
+const os = require('os');
+
 // Initialize `@electron/remote` module
 require('@electron/remote/main').initialize();
+
+// --- START GPU OPTIMIZATION & AUTO-FIX LOGIC ---
+// This logic ensures the editor runs on the dedicated GPU (if available)
+// by setting environment flags (Linux) or Registry keys (Windows).
+
+// 1. LINUX: Relaunch with Environment Variables if not present
+if (os.platform() === 'linux') {
+  // Check for our custom flag to prevent infinite loops
+  if (!process.env.GDEVELOP_GPU_OPTIMIZED) {
+    console.log(
+      'Linux detected. Restarting GDevelop with High Performance GPU flags...'
+    );
+
+    // Define the High Performance flags for AMD (DRI_PRIME) and NVIDIA (NV_PRIME...)
+    const newEnv = {
+      ...process.env,
+      GDEVELOP_GPU_OPTIMIZED: 'true',
+      DRI_PRIME: '1',
+      __NV_PRIME_RENDER_OFFLOAD: '1',
+      __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
+      __VK_LAYER_NV_optimus: 'NVIDIA_only',
+    };
+
+    // Relaunch the app with the new environment
+    spawn(process.execPath, process.argv.slice(1), {
+      env: newEnv,
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+
+    // Kill this low-performance instance immediately
+    app.exit(0);
+  }
+}
+
+// 2. WINDOWS: Check Registry & Auto-Restart if missing
+if (os.platform() === 'win32') {
+  const exePath = app.getPath('exe');
+  const registryKey =
+    'HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences';
+  const regValue = 'GpuPreference=2;'; // 2 = High Performance
+
+  try {
+    // Check if our specific EXE is already listed in the registry
+    execSync(`reg query "${registryKey}" /v "${exePath}"`, {
+      stdio: 'ignore',
+    });
+    // If successful, the key exists. We do nothing and let the app load.
+  } catch (e) {
+    // If "reg query" fails, the entry is missing. Let's add it.
+    try {
+      console.log('Applying High Performance GPU preference to Registry...');
+      // Add the registry key forcing High Performance
+      execSync(
+        `reg add "${registryKey}" /v "${exePath}" /t REG_SZ /d "${regValue}" /f`
+      );
+
+      // Restart the app so Windows Scheduler picks up the new setting
+      console.log('Optimization applied. Restarting GDevelop...');
+      app.relaunch();
+      app.exit(0);
+    } catch (err) {
+      console.error('Failed to set GPU preference:', err);
+      // We continue anyway so the app still opens, even if optimization failed
+    }
+  }
+}
+// --- END GPU OPTIMIZATION LOGIC ---
 
 log.info('GDevelop Electron app starting...');
 
